@@ -9,7 +9,12 @@ from sklearn.metrics import pairwise_distances
 from scipy.spatial.distance import cosine
 from scipy.spatial.distance import euclidean, pdist, squareform
 from sklearn.linear_model import SGDClassifier
-from sklearn.svm import LinearSVC
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.svm import SVC
+from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier
+from sklearn.naive_bayes import GaussianNB
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
 
 def readfile (name):
     """ Return a 3 columns matrix with links data
@@ -28,52 +33,75 @@ def readfile (name):
     csvFile.close()
     return (array)
 
-def multiGD(B):
+def genClf(B, n, clf, row=True, T = 0):
+    S, P = multiClf(B, clf, row)
+    print("ERROR MDGD TEST: ", error(S,T))
+    for i in range(n):
+        k = np.percentile(P[S != 0][P[S != 0] != 0], 99.99)
+        S[P < k] = 0
+        S[B != 0] = 0
+        B += S
+        print("DESPUES: ", len(B[B > 0]))
+        S, P = multiClf(B, clf, row)
+        print("ERROR MDGD TEST: ", error(S,T))
+        print(i)
+    return (S, P)
+
+# Añadir por filas o columnas
+# https://www.youtube.com/watch?v=h9gpufJFF-0
+def multiClf(B, clf, row = True):
     """ Return a matrix with the predictions of the ratings of the
     movies that users have not seen yet
     - B: links matrix
-    - lr: learn rate
+    - clf: algorithm choice
+    - row: apply the algorithm
     - iter: max iterations
-    - err: min error accepted
+    - tol: tolerance for stopping criteria
     It's a simple loop over the movies that calls the descending
     gradient and join all the data returned by DG.
     """
+    if not row: B = B.T
+
     # Compute Similarity matrix
     similarity = 1 - pairwise_distances(B, metric = "cosine")
+    #similarity = 1 - pairwise_distances(B, metric = "euclidean")
+    #similarity = 1 - pairwise_distances(B, metric = "cityblock")
 
     S = np.zeros(shape=B.shape, dtype=float)
-
-
-    print(B.shape)
+    P = np.zeros(shape=B.shape, dtype=float)
 
     score = 0.0
-
-    # Arreglar score
 
     for i in range(B.shape[1]):
         X = np.append(np.ones([similarity.shape[1],1]),similarity,axis=1)
         Y = np.array(B[:,i])
-        """X = X[Y!=0]
-        Y = Y[Y!=0]"""
-        clf = SGDClassifier(max_iter=5000, tol=1e-4)
-        #clf = LinearSVC(random_state=0, tol=1e-5)
-        print(i)
+        if i % 100 == 0: print(i)
         if (len(Y[Y!=0]) == 0):
             S.T[i] = 2.5
+            P.T[i] = 0
         elif (np.std(Y[Y!=0]) == 0.0):
             S.T[i] = Y[Y!=0][0]
             score += len(Y[Y!=0])
+            P.T[i] = 0
         else:
             clf.fit(X[Y!=0],Y[Y!=0])
             S.T[i] = clf.predict(X)
-            score += clf.score(X[Y!=0],Y[Y!=0]) * len(Y[Y!=0])
+            s = clf.score(X[Y!=0],Y[Y!=0]) * len(Y[Y!=0])
+            P.T[i] = s
+            score += s
         
         S.T[i][Y!=0] = Y[Y!=0]
         
-
+    S[B != 0] = 0
     print(score / len(B[B!=0]))
+    if not row:
+        B = B.T
+        S = S.T
+        P = P.T
 
-    return (S)
+    return (S,P)
+
+
 
 def error(S,T):
     """ Return error per diff rating movie that thay are new in test
@@ -115,8 +143,15 @@ def main():
     print(indexs)
 
     # MULTI DESCENDING GRADIENT + CROSS VALIDATION"""
-    S = multiGD(B.T)
-    print("ERROR MDGD TEST: ", error(S.T,T))
+    #clf = SGDClassifier(max_iter=3000, tol=1e-4)
+    #clf = GaussianNB()
+    #clf = SVC(gamma='auto')
+    clf = RandomForestClassifier(n_estimators=100)
+    #clf = AdaBoostClassifier(n_estimators=100)
+    #clf = DecisionTreeClassifier(random_state=0)
+    #clf = QuadraticDiscriminantAnalysis()
+    S,P = genClf(B=B, n=5, clf=clf, row=False, T=T)
+    print("ERROR MDGD TEST: ", error(S,T))
 
     """k = 10
     S, err = CV(k, base, multiGD, lr, iter, err)
