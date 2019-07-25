@@ -24,10 +24,7 @@
 
 In this work, we will build a system for ﬁnding people who share tastes and for making automatic recommendations bases on items that other people like. We will implement and compare two diﬀerent algorithms for collaborative recommendation on real dataset: KNN and gradien descent. We splited the dataset into two parts for train set and test set. Then we build the model with the train set and predict the result of test set.
 
-
-$
-{\color{White}\displaystyle SimCosine\left ( \vec{x},\vec{y} \right )=\frac{\vec{x}\cdot \vec{y}}{\left \| \vec{x} \right \|\cdot \left \| \vec{y} \right \|}}
-$
+<img src="http://latex.codecogs.com/svg.latex?{\color{Black}\displaystyle SimCosine\left ( \vec{x},\vec{y} \right )=\frac{\vec{x}\cdot \vec{y}}{\left \| \vec{x} \right \|\cdot \left \| \vec{y} \right \|}}" border="0"/>
 
 ## <a id="knn"></a>**2. K-nearest neighbors algorithm for recommendation (KNN)**
 
