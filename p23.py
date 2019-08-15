@@ -16,6 +16,8 @@ from sklearn.naive_bayes import GaussianNB
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
 from sklearn.model_selection import KFold
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.neural_network import MLPClassifier
 
 def readfile (name):
     """ Return a 3 columns matrix with links data
@@ -35,22 +37,22 @@ def readfile (name):
     return (array)
 
 def genClf(B, n, clf, row=True, T = 0):
-    S, P = multiClf(B, clf, row)
-    print("ERROR MDGD TEST: ", error(S,T))
+    S, P, _ = multiClf(B, clf, row)
+    print("ERROR MDGD TEST: ", mae(S,T))
     for i in range(n):
         k = np.percentile(P[S != 0][P[S != 0] != 0], 99.99)
         S[P < k] = 0
         S[B != 0] = 0
         B += S
         print("DESPUES: ", len(B[B > 0]))
-        S, P = multiClf(B, clf, row)
-        print("ERROR MDGD TEST: ", error(S,T))
+        S, P, _ = multiClf(B, clf, row)
+        print("ERROR MDGD TEST: ", mae(S,T))
         print(i)
     return (S, P)
 
 # Añadir por filas o columnas
 # https://www.youtube.com/watch?v=h9gpufJFF-0
-def multiClf(B, clf, row = True):
+def multiClf(B, clf, row = True, n = 0):
     """ Return a matrix with the predictions of the ratings of the
     movies that users have not seen yet
     - B: links matrix
@@ -74,9 +76,10 @@ def multiClf(B, clf, row = True):
     score = 0.0
 
     for i in range(B.shape[1]):
+        if (i % 200 == 0): print(i)
         X = np.append(np.ones([similarity.shape[1],1]),similarity,axis=1)
         Y = np.array(B[:,i])
-        if (len(Y[Y!=0]) == 0):
+        if (len(Y[Y!=0]) == 0 or ((n != 0) and (n > len(Y[Y!=0])))):
             S.T[i] = 2.5
             P.T[i] = 0
         elif (np.std(Y[Y!=0]) == 0.0):
@@ -101,12 +104,19 @@ def multiClf(B, clf, row = True):
 
     return (S,P, score)
 
-def error(S,T):
-    """ Return error per diff rating movie that thay are new in test
+def mae(S,T):
+    """ Return mean absolute error
     - S: matrix predictions
     - T: matrix test
     """
     return(np.sum(np.abs(S-T) * (T != 0))/np.count_nonzero(T))
+
+def rmse(S,T):
+    """ Return mean square error
+    - S: matrix predictions
+    - T: matrix test
+    """
+    return(np.sqrt(np.sum(np.abs(S-T) * np.abs(S-T) * (T != 0))/np.count_nonzero(T)))
 
 def perc(S,T):
     """ Return per rating movie that thay are new in test
@@ -115,32 +125,24 @@ def perc(S,T):
     """
     return(np.sum((S == T) * (T != 0))/np.count_nonzero(T))
 
-def recall(B,k):
+def rc(base,k,s):
     """ Return matrix links with some random links deleted and a matrix
     with the indexs of this links
     B: matrix links
     k: number of links to delete
     """
-    # Matrix of indexs
-    D = np.zeros(shape=(B.shape[0],k))
-    # Indexs selections
-    indexs = np.arange(0,B.shape[1],1)
-    for i in range(B.shape[0]):
-        # We consider only good ratings to be deleted
-        select = indexs[B[i] >= 3]
-        # Randon selection
-        rd.shuffle(select)
-        select = select[:k]
-        if len(select) == k:
-            D[i] = select
-            # Delete links
-            B[i,select] = 0
-    return (B,D)
+    BN = np.zeros(shape=(943,1682))
+    baseN = base.copy()
+    np.random.shuffle(baseN)
+    baseN = np.delete(baseN,np.arange(0,k,1), axis=0)
+    for row in baseN:
+        BN[row[0]][row[1]] = row[2]
+    return(BN)
 
-def CV(base, test, clf, k):
+def CV(base, test, clf, k, n = 0):
     kf = KFold(n_splits=k, shuffle=True)
     kf.get_n_splits(base)
-    metrix = np.zeros(shape=(k,3))
+    metrix = np.zeros(shape=(k,6))
     i = 0
     B = np.zeros(shape=(943,1682))
     T = np.zeros(shape=(943,1682))
@@ -153,8 +155,17 @@ def CV(base, test, clf, k):
             B[row[0]][row[1]] = row[2]
         for row in test_cv:
             T[row[0]][row[1]] = row[2]
-        S,_, score = multiClf(B=B, clf=clf, row=False)
-        metrix[i] = np.array([score, error(S,T), perc(S,T)])
+        s = 3
+        BN = rc(base_cv,20,s)
+        S,_, score = multiClf(B=BN, clf=clf, row=False, n = n)
+        recall_aprox = len(S[BN != B][S[BN != B] == B[BN != B]]) / k
+        precision = 0.0
+        recall = 0.0
+        for j in range(1,6):
+            precision += len(S[S == T][S[S == T] == j]) / len(S[S == j])
+            recall += len(S[S == T][S[S == T] == j]) / len(T[T == j])
+        precision /= 5; recall /= 5
+        metrix[i] = np.array([score, mae(S,T), rmse(S,T), perc(S,T), precision, recall])
         i += 1
     return (metrix)
 
@@ -197,6 +208,7 @@ def main():
     #clf = AdaBoostClassifier(n_estimators=100)
     #clf = DecisionTreeClassifier(random_state=0)
     #clf = QuadraticDiscriminantAnalysis()
+    #clf = KNeighborsClassifier(n_neighbors=10)
     """S,P, score = multiClf(B=B, clf=clf, row=False)
     print("SCORE: ", score)
     print("ERROR MDGD TEST: ", error(S,T))
@@ -204,57 +216,22 @@ def main():
 
     # CROSS VALIDATION
     k = 10
+    neighbors = 15
+
+    clf = KNeighborsClassifier(n_neighbors = neighbors)
+    metrix = CV(base = base, test = test, clf = clf, k = k, n = neighbors)
+    print(metrix)
+    print(np.mean(metrix, axis=0))
+
     clf = SGDClassifier(max_iter=3000, tol=1e-4)
     metrix = CV(base, test, clf, k)
     print(metrix)
-    print("score train: ", np.average(metrix[:,0]))
-    print("error abs: ", np.average(metrix[:,1]))
-    print("perc: ", np.average(metrix[:,2]))
+    print(np.mean(metrix, axis=0))
 
     clf = RandomForestClassifier(n_estimators=100, n_jobs=1)
     metrix = CV(base, test, clf, k)
     print(metrix)
-    print("score train: ", np.average(metrix[:,0]))
-    print("error abs: ", np.average(metrix[:,1]))
-    print("perc: ", np.average(metrix[:,2]))
-
-    clf = LinearSVC()
-    metrix = CV(base, test, clf, k)
-    print(metrix)
-    print("score train: ", np.average(metrix[:,0]))
-    print("error abs: ", np.average(metrix[:,1]))
-    print("perc: ", np.average(metrix[:,2]))
-
-
-    """kf = KFold(n_splits=k, shuffle=True)
-    kf.get_n_splits(base)
-    
-    score_sum = 0.0
-    error_sum = 0.0
-    perc_sum = 0.0
-    for base_index, test_index in kf.split(base):
-        print("TRAIN:", len(base_index), "TEST:", len(test_index))
-        base_cv = base[base_index]
-        test_cv = base[test_index]
-        B = np.zeros(shape=(943,1682))
-        for row in base_cv:
-            B[row[0]][row[1]] = row[2]
-        T = np.zeros(shape=(943,1682))
-        for row in test_cv:
-            T[row[0]][row[1]] = row[2]
-        S,P, score = multiClf(B=B, clf=clf, row=False)
-        score_sum += score
-        error_sum += error(S,T)
-        perc_sum += perc(S,T)
-    print("SCORE: ", score_sum/k)
-    print("ERROR MDGD TEST: ", error_sum/k)
-    print("PERC MDGD TEST: ", perc_sum/k)"""
-
-    """k = 10
-    S, err = CV(k, base, multiGD, lr, iter, err)
-
-    print("ERROR DG CV: ", err)"""
-
+    print(np.mean(metrix, axis=0))
 
 if __name__ == '__main__':
     main()
