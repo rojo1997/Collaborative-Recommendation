@@ -8,9 +8,22 @@ import random as rd
 from sklearn.metrics import pairwise_distances
 from scipy.spatial.distance import cosine
 from scipy.spatial.distance import euclidean, pdist, squareform
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import SGDClassifier
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.svm import SVC, LinearSVC
+from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier
+from sklearn.naive_bayes import GaussianNB
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
+from sklearn.model_selection import KFold
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.neural_network import MLPClassifier
 
 def readfile (name):
+    """ Return a 3 columns matrix with links data
+    - name: path to read the data
+    The data is in csv format delimited by \t
+    """
     array = []
     csv.register_dialect('myDialect',
         delimiter = '\t',
@@ -23,150 +36,149 @@ def readfile (name):
     csvFile.close()
     return (array)
 
-def knnAlgorithm (B,neighbors):
-    # Compute Similarity matrix between
+def genClf(B, n, clf, row=True, T = 0):
+    S, P, _ = multiClf(B, clf, row)
+    print("ERROR MDGD TEST: ", mae(S,T))
+    for i in range(n):
+        k = np.percentile(P[S != 0][P[S != 0] != 0], 99.99)
+        S[P < k] = 0
+        S[B != 0] = 0
+        B += S
+        print("DESPUES: ", len(B[B > 0]))
+        S, P, _ = multiClf(B, clf, row)
+        print("ERROR MDGD TEST: ", mae(S,T))
+        print(i)
+    return (S, P)
+
+# Añadir por filas o columnas
+# https://www.youtube.com/watch?v=h9gpufJFF-0
+def multiClf(B, clf, row = True, n = 0):
+    """ Return a matrix with the predictions of the ratings of the
+    movies that users have not seen yet
+    - B: links matrix
+    - clf: algorithm choice
+    - row: apply the algorithm
+    - iter: max iterations
+    - tol: tolerance for stopping criteria
+    It's a simple loop over the movies that calls the descending
+    gradient and join all the data returned by DG.
+    """
+    if not row: B = B.T
+
+    # Compute Similarity matrix
     similarity = 1 - pairwise_distances(B, metric = "cosine")
-    # Store matrix indexs
-    max_indexs = np.zeros(shape=(len(B),neighbors), dtype=int)
-    # k-largest indexs
-    for i in range(0,len(B)):
-        max_indexs[i] = np.argpartition(similarity[i], -neighbors)[-neighbors:]
-    S = np.zeros(shape=(len(B),1682), dtype=float)
-    for i in range(0,len(B)):
-        for j in range(0,1682):
-            if (B[i][j] == 0):
-                values = B.T[j][max_indexs[i]]
-                values = values[values != 0]
-                if len(values) == 0:
-                    S[i][j] = 2.5
-                else:
-                    S[i][j] = np.mean(values)
+    #similarity = 1 - pairwise_distances(B, metric = "euclidean")
+    #similarity = 1 - pairwise_distances(B, metric = "cityblock")
 
-    return(S)
+    S = np.zeros(shape=B.shape, dtype=float)
+    P = np.zeros(shape=B.shape, dtype=float)
 
-def error(S,T):
+    score = 0.0
+
+    for i in range(B.shape[1]):
+        if (i % 200 == 0): print(i)
+        X = np.append(np.ones([similarity.shape[1],1]),similarity,axis=1)
+        Y = np.array(B[:,i])
+        if (len(Y[Y!=0]) == 0 or ((n != 0) and (n > len(Y[Y!=0])))):
+            S.T[i] = 2.5
+            P.T[i] = 0
+        elif (np.std(Y[Y!=0]) == 0.0):
+            S.T[i] = Y[Y!=0][0]
+            score += len(Y[Y!=0])
+            P.T[i] = 0
+        else:
+            clf.fit(X[Y!=0],Y[Y!=0])
+            S.T[i] = clf.predict(X)
+            s = clf.score(X[Y!=0],Y[Y!=0]) * len(Y[Y!=0])
+            P.T[i] = s
+            score += s
+        
+        S.T[i][Y!=0] = Y[Y!=0]
+        
+    S[B != 0] = 0
+    score = score / len(B[B!=0])
+    if not row:
+        B = B.T
+        S = S.T
+        P = P.T
+
+    return (S,P, score)
+
+def mae(S,T):
+    """ Return mean absolute error
+    - S: matrix predictions
+    - T: matrix test
+    """
     return(np.sum(np.abs(S-T) * (T != 0))/np.count_nonzero(T))
 
-def cross_validation_knn(k, B, neighbors):
-    size = int(B.shape[0] / k)
-    print("size split: ",size)
-    som = 0.0
-    rec = 0.0
-    for i in range(0,k):
-        # Split set
-        test_val = B[i * size:i * size + size]
-        train_val = np.vstack((B[0:i * size], B[i * size + size:B.shape[0]]))
-        # Recall part (delete links)
-        train_recall, D = recall (train_val,4)
-        # Algorithm call
-        S = knnAlgorithm(train_recall,neighbors)
-        # Recall part (predict links)
-        for j in range(0,train_val.shape[0]):
-            indexs = np.argpartition(S[j], -4)[-4:]
-            inter = list(set(indexs) & set(D[j]))
-            rec += (len(inter) / 4)
-        print(rec / train_val.shape[0])
-        print(S.shape)
-        print(test_val.shape)
-        som = som + error(S,test_val)
-    return (som/k)
+def rmse(S,T):
+    """ Return mean square error
+    - S: matrix predictions
+    - T: matrix test
+    """
+    return(np.sqrt(np.sum(np.abs(S-T) * np.abs(S-T) * (T != 0))/np.count_nonzero(T)))
 
-def cross_validation_DG(k, B, lr, iter, err):
-    size = int(B.shape[0] / k)
-    print("size split: ",size)
-    som = 0
-    recall_som = 0
-    for i in range(0,k):
-        test_val = B[i * size:i * size + size]
-        train_val = np.vstack((B[0:i * size], B[i * size + size:B.shape[0]]))
-        train_recall, D = recall (train_val,4)
-        S,W,err = multiDG(train_val, lr = lr, iter = iter, err = err)
-        for j in range(0,B.shape[0]):
-            indexs = np.argpartition(S[j], -4)[-4:]
-            rec = len(indexs.intersection(D[j])) / 4
-        print(rec / B.shape[0])
-        som = som + error(S,test_val)
-    return (som/k)
+def perc(S,T):
+    """ Return per rating movie that thay are new in test
+    - S: matrix predictions
+    - T: matrix test
+    """
+    return(np.sum((S == T) * (T != 0))/np.count_nonzero(T))
 
-def sigma(x):
-    return 1 / (1 + np.exp(-x))
+def rc(base,k,s):
+    """ Return matrix links with some random links deleted and a matrix
+    with the indexs of this links
+    B: matrix links
+    k: number of links to delete
+    """
+    BN = np.zeros(shape=(943,1682))
+    baseN = base.copy()
+    np.random.shuffle(baseN)
+    baseN = np.delete(baseN,np.arange(0,k,1), axis=0)
+    for row in baseN:
+        BN[row[0]][row[1]] = row[2]
+    return(BN)
 
-def sumGD(X,Y,w,j):
-    acc = 0.0
-    for n in range(0,X.shape[0]):
-        acc = acc + X[n,j] * (np.sign(np.sum(w * X[n])) - Y[:,n])
-    return (acc)
-
-def evalu(X,Y,w):
-    Y_new = np.matmul(w,X.T)
-    max = np.max(Y_new)
-    min = np.min(Y_new)
-    Y_new = 1 + 4 * (Y_new - min) / (max - min)
-    err = error(Y_new.T[0:Y_new.shape[1] - 1], Y)
-    return(err)
-
-def GD(X, Y, lr, iter, err):
+def CV(base, test, clf, k, n = 0):
+    kf = KFold(n_splits=k, shuffle=True)
+    kf.get_n_splits(base)
+    metrix = np.zeros(shape=(k,7))
     i = 0
-    test = True
-    # Matrix (n * (m + 1))
-    w = np.ones(shape=(1,X.shape[1]), dtype=float)
-    w_best = w
-    y_best = w
-    er_best = 4
-    while (i < iter and test):
-        # (n * (m + 1)) = (n * (m + 1)) - k * (n * (m + 1))
-        for j in range(0,X.shape[0]):
-            w[:,j] = w[:,j] - lr * sumGD(X,Y,w,j)
+    B = np.zeros(shape=(943,1682))
+    T = np.zeros(shape=(943,1682))
+    for base_index, test_index in kf.split(base):
+        print(i)
+        base_cv = base[base_index]
+        test_cv = base[test_index]
+        B.fill(0); T.fill(0)
+        for row in base_cv:
+            B[row[0]][row[1]] = row[2]
+        for row in test_cv:
+            T[row[0]][row[1]] = row[2]
+        s = 3
+        BN = rc(base_cv,20,s)
+        print(len(BN[BN!=B]))
+        S,_, score = multiClf(B=BN, clf=clf, row=False, n = n)
+        recall_aprox = len(S[BN != B][S[BN != B] == B[BN != B]]) / 20
+        precision = 0.0
+        recall = 0.0
+        for j in range(1,6):
+            precision += len(S[S == T][S[S == T] == j]) / len(S[S == j])
+            recall += len(S[S == T][S[S == T] == j]) / len(T[T == j])
+        precision /= 5; recall /= 5
+        metrix[i] = np.array([score, mae(S,T), rmse(S,T), perc(S,T), precision, recall, recall_aprox])
         i += 1
-        # k1 < k2
-        Y_new = np.matmul(w,X.T)
-        max = np.max(Y_new)
-        min = np.min(Y_new)
-        Y_new = 1 + 4 * (Y_new - min) / (max - min)
-        er = np.sum(np.multiply(np.abs(Y_new - Y), (Y != 0))) / np.count_nonzero(Y)
-        if (er < er_best):
-            er_best = er
-            w_best = w
-            y_best = Y_new
-        if (er < err or er == err):
-            test = False
-    return(w_best, er_best, y_best)
-
-def multiDG(B, lr, iter, err):
-    similarity = 1 - pairwise_distances(B, metric = "cosine")
-    W = np.zeros(shape=(B.shape[1],B.shape[0]+1), dtype=float)
-    S = np.zeros(shape=B.shape, dtype=float)
-    some = 0.0
-    for i in range(B.shape[1]):
-        X = np.append(np.ones([similarity.shape[1],1]),similarity,axis=1)
-        Y = np.matrix(B[:,i])
-        W[i], err, S.T[i] = GD(X = X, Y = Y, lr = lr, iter = iter, err = err)
-        print(err)
-        some = some + err
-    err = some / B.shape[1]
-    return (S,W,err)
-
-def recall(B,k):
-    D = np.zeros(shape=(B.shape[0],k))
-    indexs = np.arange(0,B.shape[1],1)
-    for i in range(B.shape[0]):
-        select = indexs[B[i] >= 3]
-        rd.shuffle(select)
-        select = select[:k]
-        D[i] = select
-        B[i,select] = 0
-    return (B,D)
+    return (metrix)
 
 def main():
     # READ DATA
-    test = readfile (os.getcwd() + '/ml-100k/u2.test')
-    base = readfile (os.getcwd() + '/ml-100k/u2.base')
+    test = np.array(readfile (os.getcwd() + '/ml-100k/u2.test'))
+    base = np.array(readfile (os.getcwd() + '/ml-100k/u2.base'))
 
-    print(len(test))
-    print(len(base))
+    print("Test set size: ", len(test))
+    print("Train set size: ", len(base))
 
     # COMPUTE MATRIX LINKS
-
     B = np.zeros(shape=(943,1682))
     for row in base:
         B[row[0]][row[1]] = row[2]
@@ -174,48 +186,24 @@ def main():
     for row in test:
         T[row[0]][row[1]] = row[2]
 
-    # KNN ALGORITHM + CROSS VALIDATION
+    # CROSS VALIDATION
+    k = 10
     neighbors = 15
 
-    S = knnAlgorithm(B, neighbors)
+    clf = KNeighborsClassifier(n_neighbors = neighbors)
+    metrix = CV(base = base, test = test, clf = clf, k = k, n = neighbors)
+    print(metrix)
+    print(np.mean(metrix, axis=0))
 
-    print("ERROR KNN IN: ", error(S,B))
-    print("ERROR KNN OUT: ", error(S,T))
-    
-    k = 10
+    clf = SGDClassifier(max_iter=3000, tol=1e-4)
+    metrix = CV(base, test, clf, k)
+    print(metrix)
+    print(np.mean(metrix, axis=0))
 
-    err = cross_validation_knn(k, B, neighbors)
-
-    # KNN PREDICT
-    user = 45
-    n_movies = 3
-    indexs = np.argpartition(S[user], -n_movies)[-n_movies:]
-    print(indexs)
-    
-
-    # MULTI DESCENDING GRADIENT + CROSS VALIDATION
-    """lr = 0.1
-    iter = 100
-    err = 0.5
-
-    S, w, err = multiDG(B, lr = lr, iter = iter, err = err)
-
-    k = 10
-
-    err = cross_validation(k, B, lr = lr, iter = iter, err = err)
-
-    print("ERROR DG: ", error(S,T))"""
-
-    #np.savetxt('B.txt',B,fmt = '%.2f')
-    #np.savetxt('S.txt',S,fmt = '%.2f')
-
-
-    # Nota: 
-    """model = LinearRegression()
-    model.fit(X,Y)"""
-
-    
-
+    clf = RandomForestClassifier(n_estimators=100, n_jobs=1)
+    metrix = CV(base, test, clf, k)
+    print(metrix)
+    print(np.mean(metrix, axis=0))
 
 if __name__ == '__main__':
     main()
